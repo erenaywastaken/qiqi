@@ -7,16 +7,14 @@
 
 #define BASE_IMPLEMENTATION
 #include "base.h"
+#include "base_ext.h"
 
 #define PORT 8080
 #define BACKLOG 64
 
-#define STR_FMT "%.*s"
-#define STR_ARG(s) (int)(s).length, (s).data
-
-//TODO: Switch to LogX functions from base.h
-
 int main(int argc, const char *argv[]) {
+  LogInit();
+
   struct sockaddr_in serverAddress;
   serverAddress.sin_family = AF_INET; // IPv4
   serverAddress.sin_port = htons(PORT);
@@ -30,12 +28,12 @@ int main(int argc, const char *argv[]) {
 
   if (bind(serverSocket, (struct sockaddr *)&serverAddress,
            sizeof(serverAddress)) < 0) {
-    printf("Error: Can't bind the socket!\n");
+    LogError("Error: Can't bind the socket! (Is another server running?)\n");
     return 1;
   }
 
   if (listen(serverSocket, BACKLOG) < 0) {
-    printf("Error: Can't listen on the socket!\n");
+    LogError("Error: Can't listen on the socket!\n");
     return 1;
   }
 
@@ -45,11 +43,11 @@ int main(int argc, const char *argv[]) {
                           NULL, 0, 0);
 
   if (error != 0) {
-    printf("Error: %s\n", gai_strerror(error));
+    LogError("Error: %s\n", gai_strerror(error));
     return 1;
   }
 
-  printf("\nServer is listening on http://%s:%d/\n\n", hostBuffer,
+  LogInfo("Server is listening on http://%s:%d/", hostBuffer,
          PORT);
 
   while (true) {
@@ -58,7 +56,7 @@ int main(int argc, const char *argv[]) {
     int clientSocket = accept(serverSocket, (struct sockaddr *)&clientAddress,
                               &clientAddressSize);
     if (clientSocket < 0) {
-      printf("Warning: Failed to accept a client!\n");
+      LogError("Warning: Failed to accept a client!\n");
       continue;
     }
 
@@ -87,6 +85,6 @@ int main(int argc, const char *argv[]) {
       }
     }
 
-    printf("Request: "STR_FMT"\n", STR_ARG(request.buffer));
+    LogDebug("Request: "STR_FMT"\n", STR_ARG(request.buffer));
   }
 }
