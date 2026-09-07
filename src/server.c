@@ -15,25 +15,133 @@
 
 #define HTDOCS S("htdocs")
 
-#define HTTP_200 "200 OK"
-#define HTTP_404 "404 Not Found"
-#define HTTP_500 "500 Internal Server Error"
+typedef struct {
+  String method;
+  String uri;
+  String version;
+} HttpRequest;
 
-// Source - https://stackoverflow.com/a/42561141
-// Posted by FogleBird
-// Retrieved 2026-09-07, License - CC BY-SA 3.0
+typedef struct {
+  String resCode;
+  String body;
+} HttpResponse;
 
-int sendAll(int sd, char *data, int length) {
-  int count = 0;
-  while (count < length) {
-    int n = send(sd, data + count, length, 0);
-    if (n == -1) {
-      return -1;
-    }
-    count += n;
-    length -= n;
+const String HTTP_200 = S("200 OK");
+const String HTTP_400 = S("400 Bad Request");
+const String HTTP_404 = S("404 Not Found");
+const String HTTP_405 = S("405 Method Not Allowed");
+const String HTTP_500 = S("500 Internal Server Error");
+
+bool sendAll(int sd, const char *data, size_t length) {
+  size_t sent = 0;
+  while (sent < length) {
+    ssize_t n = send(sd, data + sent, length - sent, 0);
+
+    if (n <= 0)
+      return false;
+
+    sent += n;
   }
-  return 0;
+  return true;
+}
+
+String getErrorPage(Arena *arena, String resCode) {
+  StringBuilder builder = SBCreate(arena);
+  SBAddF(&builder, "<center><h1>%S</h1></center>", resCode);
+  return builder.buffer;
+}
+
+bool parseRequest(String reqData, HttpRequest *request) {
+  size_t lineIndex = 0;
+  SplitView lines = StrSplitView(reqData, S("\r\n"));
+  while (true) {
+    String line = SplitViewNext(&lines);
+    if (StrIsEmpty(line))
+      break;
+
+    LogDebug("Line %zu: " STR_FMT, lineIndex, STR_ARG(line));
+
+    if (lineIndex == 0) {
+      // Request-Line
+      SplitView parts = StrSplitView(line, S(" "));
+      String method = SplitViewNext(&parts);
+      String uri = SplitViewNext(&parts);
+      String version = SplitViewNext(&parts);
+
+      *request =
+          (HttpRequest){.method = method, .uri = uri, .version = version};
+      return true;
+    }
+
+    ++lineIndex;
+  }
+
+  return false;
+}
+
+void sendResponse(Arena *arena, int clientSocket, HttpResponse response) {
+  StringBuilder builder = SBCreate(arena);
+
+  SBAddF(&builder, "HTTP/1.1 %S\r\n", response.resCode);
+  SBAdd(&builder, S("Content-Length: "));
+  SBAddF(&builder, "%ul", (uint64_t)response.body.length);
+  SBAdd(&builder, S("\r\n"));
+  SBAdd(&builder, S("Content-Type: text/html\r\n"));
+  SBAdd(&builder, S("Connection: close\r\n"));
+  SBAdd(&builder, S("\r\n"));
+  SBAdd(&builder, response.body);
+
+  LogDebug("Response: " STR_FMT, STR_ARG(builder.buffer));
+
+  sendAll(clientSocket, builder.buffer.data, builder.buffer.length);
+}
+
+HttpResponse serveFile(Arena *arena, String uri) {
+  HttpResponse resp = {.resCode = HTTP_200};
+
+  if (StrEq(uri, S("/"))) {
+    uri = S("/index.html");
+  }
+
+  // Read the requested file
+  String filePath = PathJoin(arena, HTDOCS, uri);
+
+  LogDebug("Reading file: " STR_FMT, STR_ARG(filePath));
+  FileReadResult file = FileReadEz(arena, filePath);
+  if (file.error == SUCCESS) {
+    resp.body = file.data;
+  } else {
+    if (file.error == FILE_NOT_FOUND) {
+      resp.resCode = HTTP_404;
+    } else {
+      resp.resCode = HTTP_500;
+      String err = ErrToStr(file.error);
+      LogError("Failed to get file stats: " STR_FMT, STR_ARG(err));
+    }
+
+    resp.body = getErrorPage(arena, resp.resCode);
+  }
+
+  return resp;
+}
+
+HttpResponse errorResponse(Arena *arena, String resCode) {
+  return (HttpResponse){.resCode = resCode,
+                        .body = getErrorPage(arena, resCode)};
+}
+
+void handleRequest(Arena *arena, int clientSocket, String reqData) {
+  HttpRequest request;
+  HttpResponse response;
+
+  if (!parseRequest(reqData, &request))
+    response = errorResponse(arena, HTTP_400);
+  else if (!StrEq(request.method, S("GET")))
+    response = errorResponse(arena, HTTP_405);
+  else
+    response = serveFile(arena, request.uri);
+
+  sendResponse(arena, clientSocket, response);
 }
 
 int main(int argc, const char *argv[]) {
@@ -83,27 +191,21 @@ int main(int argc, const char *argv[]) {
       continue;
     }
 
-    // Disable https://en.wikipedia.org/wiki/Nagle's_algorithm
-    int noDelay = 1;
-    setsockopt(clientSocket, IPPROTO_TCP, TCP_NODELAY, &noDelay,
-               sizeof(noDelay));
-
     // Allocate an arena for this request
     Arena *arena = ArenaCreate(4096);
 
     StringBuilder request = SBCreate(arena);
 
-    char buffer[4096];
-
+    char recvBuf[4096];
     while (true) {
-      ssize_t n = recv(clientSocket, buffer, sizeof(buffer), 0);
+      ssize_t n = recv(clientSocket, recvBuf, sizeof(recvBuf), 0);
 
       if (n <= 0) {
         break;
       }
 
       SBAdd(&request, (String){
-                          .data = buffer,
+                          .data = recvBuf,
                           .length = n,
                       });
 
@@ -113,68 +215,11 @@ int main(int argc, const char *argv[]) {
       }
     }
 
-    LogDebug("Request: " STR_FMT "", STR_ARG(request.buffer));
+    LogDebug("Request: " STR_FMT, STR_ARG(request.buffer));
 
-    size_t lineIndex = 0;
-    SplitView lines = StrSplitView(request.buffer, S("\r\n"));
-    while (true) {
-      String line = SplitViewNext(&lines);
-      if (StrIsEmpty(line))
-        break;
+    handleRequest(arena, clientSocket, request.buffer);
 
-      LogDebug("Line %zu: " STR_FMT, lineIndex, STR_ARG(line));
-
-      if (lineIndex == 0) {
-        // Request-Line
-        SplitView parts = StrSplitView(line, S(" "));
-        String method = SplitViewNext(&parts);
-        String uri = SplitViewNext(&parts);
-        String version = SplitViewNext(&parts);
-
-        if (!StrEq(method, S("GET"))) {
-          break;
-        }
-
-        // Valid request, handle
-        char *resCode = HTTP_200;
-
-        if (StrEq(uri, S("/"))) {
-          uri = S("/index.html");
-        }
-
-        // Read the requested file
-        String filePath = PathJoin(arena, HTDOCS, uri);
-
-        LogDebug("Reading file: " STR_FMT, STR_ARG(filePath));
-        FileReadResult file = FileReadEz(arena, filePath);
-        if (file.error != SUCCESS) {
-          if (file.error == FILE_NOT_FOUND) {
-            resCode = HTTP_404;
-          } else {
-            resCode = HTTP_500;
-            String err = ErrToStr(file.error);
-            LogError("Failed to get file stats: " STR_FMT, STR_ARG(err));
-          }
-        }
-
-        // Construct the response
-        StringBuilder response = SBCreate(arena);
-
-        SBAddF(&response, "HTTP/1.1 %s \r\n", resCode);
-        SBAdd(&response, S("Content-Length: "));
-        SBAddF(&response, "%ul", (uint64_t)file.data.length);
-        SBAdd(&response, S("\r\n"));
-        SBAdd(&response, S("Content-Type: text/html\r\n"));
-        SBAdd(&response, S("Connection: close\r\n"));
-        SBAdd(&response, S("\r\n"));
-        SBAdd(&response, file.data);
-
-        LogDebug("Response: " STR_FMT, STR_ARG(response.buffer));
-
-        sendAll(clientSocket, response.buffer.data, response.buffer.length);
-      }
-
-      ++lineIndex;
-    }
+    close(clientSocket);
+    ArenaFree(arena);
   }
 }
