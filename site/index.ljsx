@@ -1,0 +1,11 @@
+local function Header()
+    <h1>My Lua + HTML Page</h1>
+end
+
+function Index()
+    local count = 0
+    <div class="background-color: aqua;">
+    {Header()}
+    <p>Time on render: {os.date()}</p>
+    </div>
+end
