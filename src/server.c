@@ -11,7 +11,6 @@
 #include "base_ext.h"
 #include "cgi.h"
 
-#define PORT 8080
 #define BACKLOG 64
 
 #define LDOCS S("dist")
@@ -158,12 +157,21 @@ void handleRequest(Arena *arena, int clientSocket, CGI *cgi, String reqData) {
 int main(int argc, const char *argv[]) {
   LogInit();
 
+  int port = 8080;
+  if (argc > 1) {
+    port = atoi(argv[1]);
+    if (port == 0) {
+      LogError("Please pass a valid port argument.");
+      return 1;
+    }
+  }
+
   CGI *cgi = cgi_init();
 
   struct sockaddr_in serverAddress;
   serverAddress.sin_family = AF_INET; // IPv4
-  serverAddress.sin_port = htons(PORT);
-  serverAddress.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // localhost
+  serverAddress.sin_port = htons(port);
+  serverAddress.sin_addr.s_addr = htonl(INADDR_ANY);
 
   int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
   int reuseAddress = 1;
@@ -192,7 +200,7 @@ int main(int argc, const char *argv[]) {
     return 1;
   }
 
-  LogInfo("Server is listening on http://%s:%d/", hostBuffer, PORT);
+  LogInfo("Server is listening on http://%s:%d/", hostBuffer, port);
 
   while (true) {
     struct sockaddr_in clientAddress;
