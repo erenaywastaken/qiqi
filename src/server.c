@@ -9,11 +9,12 @@
 #define BASE_IMPLEMENTATION
 #include "base.h"
 #include "base_ext.h"
+#include "cgi.h"
 
 #define PORT 8080
 #define BACKLOG 64
 
-#define HTDOCS S("htdocs")
+#define LDOCS S("dist")
 
 typedef struct {
   String method;
@@ -96,27 +97,37 @@ void sendResponse(Arena *arena, int clientSocket, HttpResponse response) {
   sendAll(clientSocket, builder.buffer.data, builder.buffer.length);
 }
 
-HttpResponse serveFile(Arena *arena, String uri) {
+HttpResponse serveFile(Arena *arena, CGI *cgi, String uri) {
   HttpResponse resp = {.resCode = HTTP_200};
 
   if (StrEq(uri, S("/"))) {
-    uri = S("/index.html");
+    uri = S("/index.lua");
   }
 
   // Read the requested file
-  String filePath = PathJoin(arena, HTDOCS, uri);
+  String filePath = PathJoin(arena, LDOCS, uri);
 
   LogDebug("Reading file: " STR_FMT, STR_ARG(filePath));
-  FileReadResult file = FileReadEz(arena, filePath);
-  if (file.error == SUCCESS) {
-    resp.body = file.data;
+  FileStatsResult stats = FileStats(filePath);
+  if (stats.error == SUCCESS) {
+    String output;
+    // This assumes that filePath is always null terminated,
+    // which is correct in our case
+    if (cgi_run(cgi, arena, filePath.data, &output)) {
+      resp.body = output;
+    } else {
+      resp.resCode = HTTP_500;
+      resp.body = getErrorPage(arena, HTTP_500);
+      LogError("Failed to run Lua route '" STR_FMT "': " STR_FMT, STR_ARG(uri),
+               STR_ARG(output));
+    }
   } else {
-    if (file.error == FILE_NOT_FOUND) {
+    if (stats.error == FILE_NOT_FOUND) {
       resp.resCode = HTTP_404;
     } else {
       resp.resCode = HTTP_500;
-      String err = ErrToStr(file.error);
-      LogError("Failed to get file stats: " STR_FMT, STR_ARG(err));
+      String err = ErrToStr(stats.error);
+      LogError("Failed to check file: " STR_FMT, STR_ARG(err));
     }
 
     resp.body = getErrorPage(arena, resp.resCode);
@@ -130,7 +141,7 @@ HttpResponse errorResponse(Arena *arena, String resCode) {
                         .body = getErrorPage(arena, resCode)};
 }
 
-void handleRequest(Arena *arena, int clientSocket, String reqData) {
+void handleRequest(Arena *arena, int clientSocket, CGI *cgi, String reqData) {
   HttpRequest request;
   HttpResponse response;
 
@@ -139,13 +150,15 @@ void handleRequest(Arena *arena, int clientSocket, String reqData) {
   else if (!StrEq(request.method, S("GET")))
     response = errorResponse(arena, HTTP_405);
   else
-    response = serveFile(arena, request.uri);
+    response = serveFile(arena, cgi, request.uri);
 
   sendResponse(arena, clientSocket, response);
 }
 
 int main(int argc, const char *argv[]) {
   LogInit();
+
+  CGI *cgi = cgi_init();
 
   struct sockaddr_in serverAddress;
   serverAddress.sin_family = AF_INET; // IPv4
@@ -217,9 +230,11 @@ int main(int argc, const char *argv[]) {
 
     LogDebug("Request: " STR_FMT, STR_ARG(request.buffer));
 
-    handleRequest(arena, clientSocket, request.buffer);
+    handleRequest(arena, clientSocket, cgi, request.buffer);
 
     close(clientSocket);
     ArenaFree(arena);
   }
+
+  cgi_shutdown(cgi);
 }

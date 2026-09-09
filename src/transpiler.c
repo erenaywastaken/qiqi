@@ -59,12 +59,13 @@ static bool transpile(StringBuilder *builder, String input) {
     } break;
 
     case HTML: {
-      if (c == '{') {
+      if (c == '{' && i + 1 < input.length && input.data[i + 1] == '{') {
         size_t len = input.data + i - sliceStart;
         emitSlice(builder, S("write([["), sliceStart, len, S("]])\n"));
 
         state = LUA_EXPR;
-        sliceStart = input.data + i + 1;
+        sliceStart = input.data + i + 2;
+        ++i;
       } else if (c == '<') {
         htmlClosingTag = i + 1 < input.length && input.data[i + 1] == '/';
 
@@ -82,16 +83,21 @@ static bool transpile(StringBuilder *builder, String input) {
         }
 
         htmlClosingTag = false;
+      } else if (c == '>' && !htmlClosingTag) {
+        // Self closing tag < />
+        if (i > 0 && input.data[i - 1] == '/')
+          --htmlDepth;
       }
     } break;
 
     case LUA_EXPR: {
-      if (c == '}') {
+      if (c == '}' && i + 1 < input.length && input.data[i + 1] == '}') {
         size_t len = input.data + i - sliceStart;
         emitSlice(builder, S("write("), sliceStart, len, S(")\n"));
 
         state = HTML;
-        sliceStart = input.data + i + 1;
+        sliceStart = input.data + i + 2;
+        ++i;
       }
     } break;
     }

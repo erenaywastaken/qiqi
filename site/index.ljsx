@@ -2,10 +2,67 @@ local function Header()
     <h1>My Lua + HTML Page</h1>
 end
 
+local function Posts()
+    math.randomseed(os.time())
+
+    -- Put all the posts into a table
+    local lines = {}
+    for line in io.lines("site/data/posts.csv") do lines[#lines + 1] = line end
+
+    -- Shuffle the posts to showcase SSR
+    for i = #lines, 2, -1 do
+        local j = math.random(i)
+        lines[i], lines[j] = lines[j], lines[i]
+    end
+
+    for _, line in ipairs(lines) do
+        for title, content in string.gmatch(line, "(.+),(.+)") do
+            <div class="post">
+                <div class="title">{{title}}</div>
+                <span>{{content}}</span>
+            </div>
+        end
+    end
+end
+
 function Index()
-    local count = 0
-    <div class="background-color: aqua;">
-    {Header()}
-    <p>Time on render: {os.date()}</p>
-    </div>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <title>My Blog</title>
+        <style>
+        * {
+            font-family: sans-serif;
+        }
+        .post {
+            background-color: aqua;
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 20px;
+            width: 30%;
+        }
+        .post .title {
+            font-size: 2rem;
+            font-weight: bold;
+        }
+        .hint {
+            font-style: italic;
+            font-weight: bold;
+            font-size: 1.5rem;
+            margin-bottom:20px;
+        }
+        </style>
+    </head>
+    <body>
+        <div class="app">
+            {{Header()}}
+            <p>Time on render: {{os.date()}}</p>
+            <div class="hint">
+            try refreshing the page to see the post order get randomized by Lua
+            </div>
+            {{Posts()}}
+        </div>
+    </body>
+    </html>
 end
