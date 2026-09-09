@@ -62,6 +62,7 @@ function Index()
             try refreshing the page to see the post order get randomized by Lua
             </div>
             {{Posts()}}
+            <div class="hint">Powered by QiQi. You can get QiQi from <a href="https://github.com/erenaywastaken/qiqi">here</a>.</div>
         </div>
     </body>
     </html>
